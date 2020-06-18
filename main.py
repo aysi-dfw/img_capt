@@ -18,7 +18,7 @@ class DataLoader:
 
     @staticmethod
     def load_data():
-        with open('captions.json', 'r') as f:
+        with open('coco-data/captions.json', 'r') as f:
             anns = json.load(f)
 
         tokenizer = K.preprocessing.text.Tokenizer(num_words=VOCAB_SIZE)
@@ -32,7 +32,7 @@ class DataLoader:
         x = []
         y = []
         for k, v in tqdm(anns.items()):
-            img_path = os.path.join('coco_data', '{}.png'.format(str(k).zfill(20)))
+            img_path = os.path.join('coco-data', 'coco_data', '{}.png'.format(str(k).zfill(20)))
             img = io.imread(img_path)
 
             if np.shape(img) != (224, 224, 3):
@@ -43,13 +43,7 @@ class DataLoader:
                 seq = tokenizer.texts_to_sequences([ann])[0]
                 y.append(K.preprocessing.sequence.pad_sequences([seq], maxlen=MAX_LEN, padding='post')[0])
 
-        # return train_test_split(x, y, test_size=0.2, random_state=42)
-
         x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, random_state=42)
-
-        # for i in range(len(x_train)):
-        #     x_train[i] = [x_train[i], y_train[i]]
-
         return np.asarray(x_train), np.asarray(x_test), np.asarray(y_train), np.asarray(y_test)
 
 
@@ -139,7 +133,8 @@ def main():
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     print(model.summary())
 
-    model.fit([x_train, y_train], y_train, batch_size=32, epochs=10)
+    model.fit([x_train, y_train], y_train, batch_size=32, epochs=10,
+              validation_data=[[x_train, y_train], y_test])
 
 
 if __name__ == '__main__':

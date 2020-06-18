@@ -128,13 +128,15 @@ def main():
     x_train, x_test, y_train, y_test = DataLoader.load_data()
     print(np.shape(x_train))
     print(np.shape(y_train))
+    print(np.shape(x_test))
+    print(np.shape(y_test))
 
     model = cap.get_model()
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     print(model.summary())
 
     model.fit([x_train, y_train], y_train, batch_size=32, epochs=10,
-              validation_data=[[x_train, y_train], y_test])
+              validation_data=[[x_test, y_test], y_test])
 
 
 if __name__ == '__main__':

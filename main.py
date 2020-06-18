@@ -5,8 +5,10 @@ import os
 import tensorflow as tf
 import skimage.io as io
 from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
 
 K = tf.keras
+
 VGG_FEATURES = 4096
 VOCAB_SIZE = 1000
 MAX_LEN = 20
@@ -14,20 +16,19 @@ MAX_LEN = 20
 
 class DataLoader:
     def __init__(self):
-        pass
+        self.tokenizer = None
 
-    @staticmethod
-    def load_data():
+    def load_data(self):
         with open('coco-data/captions.json', 'r') as f:
             anns = json.load(f)
 
-        tokenizer = K.preprocessing.text.Tokenizer(num_words=VOCAB_SIZE)
+        self.tokenizer = K.preprocessing.text.Tokenizer(num_words=VOCAB_SIZE)
 
         tlist = []
         for _, v in anns.items():
             for el in v:
                 tlist.append(el)
-        tokenizer.fit_on_texts(tlist)
+        self.tokenizer.fit_on_texts(tlist)
 
         x = []
         y = []
@@ -40,7 +41,7 @@ class DataLoader:
 
             for ann in v:
                 x.append(img)
-                seq = tokenizer.texts_to_sequences([ann])[0]
+                seq = self.tokenizer.texts_to_sequences([ann])[0]
                 y.append(K.preprocessing.sequence.pad_sequences([seq], maxlen=MAX_LEN, padding='post')[0])
 
         x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, random_state=42)
@@ -94,12 +95,18 @@ class ImageCaptioner:
         hidden, cell = None, None
 
         for i in range(MAX_LEN):
-            embed = features if len(output_sentence) == 0 else self.lstm['embed'](output_sentence[-1])
-            _, new_hidden, new_cell = self.lstm['lstm_cells'](embed, initial_state=[hidden, cell])
-            hidden, cell = new_hidden, new_cell
+            embed = features if len(output_sentence) == 0 else self.lstm['embed'](tf.expand_dims(output_sentence[-1], axis=0))
+            embed = tf.expand_dims(embed, axis=1)
 
-            dense_out = self.lstm['dense_out'](new_hidden)
-            output_sentence.append(tf.argmax(dense_out, axis=1))
+            if hidden is not None and cell is not None:
+                _, new_hidden, new_cell = self.lstm['lstm_cells'](embed, initial_state=[hidden, cell])
+            else:
+                _, new_hidden, new_cell = self.lstm['lstm_cells'](embed)
+
+            dense_out = self.lstm['dense_out'](tf.expand_dims(new_hidden, axis=1))
+
+            hidden, cell = new_hidden, new_cell
+            output_sentence.append(tf.squeeze(tf.argmax(dense_out, axis=2)))
 
         return output_sentence
 
@@ -125,19 +132,36 @@ class ImageCaptioner:
 
 def main():
     cap = ImageCaptioner(hidden_size=256, dropout=0.2)
-    x_train, x_test, y_train, y_test = DataLoader.load_data()
-    print(np.shape(x_train))
-    print(np.shape(y_train))
-    print(np.shape(x_test))
-    print(np.shape(y_test))
+    dl = DataLoader()
+
+    x_train, x_test, y_train, y_test = dl.load_data()
+    print(np.shape(x_train), np.shape(y_train), np.shape(x_test), np.shape(y_test))
 
     model = cap.get_model()
     model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
     print(model.summary())
 
-    model.fit([x_train, y_train], y_train, batch_size=32, epochs=10,
+    model.fit([x_train, y_train], y_train, batch_size=128, epochs=15,
               validation_data=[[x_test, y_test], y_test])
+
+    for el in np.random.choice(np.shape(x_test)[0], 9):
+        plt.imshow(x_test[el])
+
+        sent_indices = cap.fprop(np.expand_dims(x_test[el], axis=0))
+        sent = dl.tokenizer.sequences_to_texts([[x.numpy() for x in sent_indices]])[0]
+
+        plt.title(sent, wrap=True)
+        plt.show()
 
 
 if __name__ == '__main__':
     main()
+
+# for i, el in enumerate(np.random.choice(np.shape(x_test)[0], 9)):
+#     plt.subplot(3, 3, i + 1)
+#     plt.imshow(x_test[el])
+#
+#     sent_indices = cap.fprop(np.expand_dims(x_test[el], axis=0))
+#     sent = dl.tokenizer.sequences_to_texts([[x.numpy() for x in sent_indices]])[0]
+#
+#     plt.title(sent, wrap=True)

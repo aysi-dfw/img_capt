@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 K = tf.keras
 
 VGG_FEATURES = 4096
-VOCAB_SIZE = 1000
+VOCAB_SIZE = 5000
 MAX_LEN = 20
 
 
@@ -18,8 +18,8 @@ class DataLoader:
     def __init__(self):
         self.tokenizer = None
 
-    def load_data(self):
-        with open('coco-data/captions.json', 'r') as f:
+    def load_data(self, coco=False):
+        with open('{}/captions.json'.format('coco-data' if coco else 'flickr-data'), 'r') as f:
             anns = json.load(f)
 
         self.tokenizer = K.preprocessing.text.Tokenizer(num_words=VOCAB_SIZE)
@@ -33,7 +33,10 @@ class DataLoader:
         x = []
         y = []
         for k, v in tqdm(anns.items()):
-            img_path = os.path.join('coco-data', 'coco_data', '{}.png'.format(str(k).zfill(20)))
+            if coco:
+                img_path = os.path.join('coco-data', 'coco_data', '{}.png'.format(str(k).zfill(20)))
+            else:
+                img_path = os.path.join('flickr-data', 'img_prc', k)
             img = io.imread(img_path)
 
             if np.shape(img) != (224, 224, 3):
@@ -54,13 +57,16 @@ class ImageCaptioner:
         self.dropout = dropout
 
         self.cnn = self.build_cnn_model()
+        self.feature_cast_layer = self.build_feature_casting_layer()
         self.lstm = self.build_lstm_weights()
 
-    def get_model(self):
+    def get_train_model(self):
         inp_img = K.Input((224, 224, 3))
-        inp_captions = K.Input((MAX_LEN,))
+        inp_captions = K.Input((None,))
 
-        return K.Model(inputs=[inp_img, inp_captions], outputs=self.fprop(inp_img, inp_captions, ver='train'))
+        output = self.fprop(inp_img, inp_captions, ver='train')
+
+        return K.Model(inputs=[inp_img, inp_captions], outputs=output)
 
     def fprop(self, img, captions=None, ver='test'):
         assert ver in ['train', 'test']
@@ -75,9 +81,13 @@ class ImageCaptioner:
         return out
 
     def get_features(self, x):
-        vgg_features = self.cnn(x, training=False)
-        vec = K.layers.Dense(self.hidden_size, activation='relu')(vgg_features)
-        return vec
+        features = self.cnn(x)
+        print(features)
+        out = self.feature_cast_layer(features)
+        print(self.feature_cast_layer.weights)
+        print(out)
+
+        return out
 
     def training_generate_captions(self, features, captions):
         captions = captions[:, :-1]
@@ -95,14 +105,12 @@ class ImageCaptioner:
         hidden, cell = None, None
 
         for i in range(MAX_LEN):
-            embed = features if len(output_sentence) == 0 else self.lstm['embed'](tf.expand_dims(output_sentence[-1], axis=0))
+            embed = features if len(output_sentence) == 0 else self.lstm['embed'](
+                tf.expand_dims(output_sentence[-1], axis=0))
             embed = tf.expand_dims(embed, axis=1)
 
-            if hidden is not None and cell is not None:
-                _, new_hidden, new_cell = self.lstm['lstm_cells'](embed, initial_state=[hidden, cell])
-            else:
-                _, new_hidden, new_cell = self.lstm['lstm_cells'](embed)
-
+            _, new_hidden, new_cell = self.lstm['lstm_cells'](embed, initial_state=(
+                [hidden, cell] if hidden is not None and cell is not None else None))
             dense_out = self.lstm['dense_out'](tf.expand_dims(new_hidden, axis=1))
 
             hidden, cell = new_hidden, new_cell
@@ -112,13 +120,16 @@ class ImageCaptioner:
 
     @staticmethod
     def build_cnn_model():
-        vgg = K.applications.vgg16.VGG16()
-        model = K.Model(inputs=vgg.inputs, outputs=vgg.layers[-2].output)
+        cnn = K.applications.vgg16.VGG16()
+        model = K.Model(inputs=cnn.inputs, outputs=cnn.layers[-2].output)
 
         for layer in model.layers:
             layer.trainable = False
 
         return model
+
+    def build_feature_casting_layer(self):
+        return K.layers.Dense(self.hidden_size, activation='sigmoid')
 
     def build_lstm_weights(self):
         ret = {
@@ -137,12 +148,22 @@ def main():
     x_train, x_test, y_train, y_test = dl.load_data()
     print(np.shape(x_train), np.shape(y_train), np.shape(x_test), np.shape(y_test))
 
-    model = cap.get_model()
-    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-    print(model.summary())
+    train_model = cap.get_train_model()
+    opt = K.optimizers.Adam(learning_rate=0.005)
+    train_model.compile(optimizer=opt, loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    print(train_model.summary())
 
-    model.fit([x_train, y_train], y_train, batch_size=128, epochs=15,
-              validation_data=[[x_test, y_test], y_test])
+    train_model.fit([x_train, y_train], y_train, batch_size=128, epochs=50)
+
+    for el in np.random.choice(np.shape(x_train)[0], 9):
+        plt.imshow(x_train[el])
+
+        sent_indices = cap.fprop(np.expand_dims(x_train[el], axis=0))
+        sent = dl.tokenizer.sequences_to_texts([[x.numpy() for x in sent_indices]])[0]
+
+        plt.title(sent, wrap=True)
+        plt.xlabel(dl.tokenizer.sequences_to_texts([y_train[el]])[0], wrap=True)
+        plt.show()
 
     for el in np.random.choice(np.shape(x_test)[0], 9):
         plt.imshow(x_test[el])
@@ -151,6 +172,7 @@ def main():
         sent = dl.tokenizer.sequences_to_texts([[x.numpy() for x in sent_indices]])[0]
 
         plt.title(sent, wrap=True)
+        plt.xlabel(dl.tokenizer.sequences_to_texts([y_test[el]])[0], wrap=True)
         plt.show()
 
 
